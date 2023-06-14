@@ -10,29 +10,37 @@
 	let connectButton: HTMLButtonElement;
 	let publish: HTMLButtonElement;
 	let multiaddrs: string[] = [];
+	let libp2p;
+	let messageInput: HTMLInputElement;
 
 	onMount(async () => {
-		const libp2p = await startLibp2p(serverMultiaddr ? [serverMultiaddr] : []);
+		libp2p = await startLibp2p(serverMultiaddr ? [serverMultiaddr] : null);
 
 		// @ts-ignore
 		window.libp2p = libp2p;
 
-		// set #my-peerid to libp2p.peerId.toB58String()
 		myPeerId = libp2p.peerId.toString();
 
 		libp2p.addEventListener('peer:connect', peerConnected);
+		libp2p.addEventListener('connection:open', connectionOpened);
+
 		// @ts-ignore
-		libp2p.pubsub.addEventListener('message', handleMessage);
+		libp2p.services.pubsub.addEventListener('message', handleMessage);
 
 		autoScroller();
 		enterListener();
 	});
 
 	$: if (connectButton) setupConnector(connectButton);
+
 	$: if (publish) setupPublisher(publish);
 
 	// peerConnected(event) callback sets list of peers in browser
 	function peerConnected(event: CustomEvent) {
+		const peerId = event.detail;
+	}
+
+	function connectionOpened(event: CustomEvent) {
 		const { remoteAddr } = event.detail;
 
 		//  add remoteAddr into multiaddr only if unique
@@ -43,7 +51,7 @@
 		multiaddrs = [...multiaddrs, multiaddr];
 	}
 
-	// handle messages using libp2p.pubsub.addEventListener('message', messageCB)
+	// handle messages using libp2p.services.pubsub.addEventListener('message', messageCB)
 	function handleMessage(evt: CustomEvent) {
 		console.log('handleMessage', evt.detail);
 
@@ -112,6 +120,8 @@
 				// @ts-ignore
 				window.libp2p
 			)(message);
+
+			messageInput.value = ''; // clear the input
 		});
 	}
 
@@ -171,10 +181,10 @@
 
 	<!-- Show my peer id -->
 	<div class="border rounded-lg p-2 my-1 bg-neutral-100 break-all">
-		My peerid: {myPeerId}
+		My peerid: {myPeerId ? myPeerId : 'loading...'}
 	</div>
 
-	<div class="flex w-full select-none">
+	<div class="flex w-full">
 		<label for="name">WebRTC Multiaddr:</label>
 		<input
 			type="text"
@@ -194,7 +204,7 @@
 	</div>
 
 	<!-- Connected to #peers -->
-	<div id="multiaddrs" class="flex flex-col w-full select-none h-28 overflow-scroll">
+	<div id="multiaddrs" class="flex flex-col w-full h-28 overflow-scroll">
 		{#each multiaddrs as multiaddr}
 			<li class="text-neutral-700 text-sm px-2 py-1 list-none bg-transparent">
 				{multiaddr}
@@ -225,8 +235,9 @@
 		<div id="anchor" />
 	</div>
 	<!-- Chat input -->
-	<div class="flex w-full select-none">
+	<div class="flex w-full">
 		<input
+			bind:this={messageInput}
 			type="text"
 			id="message"
 			placeholder="Type a message"

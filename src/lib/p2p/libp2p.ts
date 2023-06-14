@@ -9,6 +9,10 @@ import { yamux } from '@chainsafe/libp2p-yamux';
 import { kadDHT } from '@libp2p/kad-dht';
 import { bootstrap } from '@libp2p/bootstrap';
 import { multiaddr } from '@multiformats/multiaddr';
+import { identifyService } from 'libp2p/identify';
+import { webSockets } from '@libp2p/websockets';
+import * as filters from '@libp2p/websockets/filters';
+
 // @ts-ignore
 import { circuitRelayTransport } from 'libp2p/circuit-relay';
 
@@ -17,7 +21,7 @@ import type { Multiaddr } from '@multiformats/multiaddr';
 import type { Libp2p } from 'libp2p';
 
 export async function startLibp2p(bootstrapNodes: string[] = [WEBRTC_BOOTSTRAP_NODE]) {
-	localStorage.debug = 'libp2p*,-*:trace'; // if you wanted to exclude aything containing "gossipsub", you would add -gossipsub
+	// localStorage.debug = 'libp2p*,-*:trace'; // if you wanted to exclude aything containing "gossipsub", you would add -gossipsub
 	// localStorage.debug = "libp2p:connection-manager:dial-queue"
 
 	let peerDiscovery =
@@ -31,46 +35,69 @@ export async function startLibp2p(bootstrapNodes: string[] = [WEBRTC_BOOTSTRAP_N
 			: [];
 
 	const libp2p = await createLibp2p({
-		dht: kadDHT({
-			protocolPrefix: '/universal-connectivity',
-			maxInboundStreams: 5000,
-			maxOutboundStreams: 5000,
-			clientMode: true
-		}),
+		addresses: {
+			listen: ['/webrtc']
+		},
 		transports: [
-			webRTC(), // for browser-to-browser
-			webRTCDirect(), // for browser to server
 			webTransport(),
+			webSockets({
+				filter: filters.all
+			}),
+			webRTC({
+				rtcConfiguration: {
+					iceServers: [
+						{
+							urls: ['stun:stun.l.google.com:19302', 'stun:global.stun.twilio.com:3478']
+						}
+					]
+				}
+			}),
+			webRTCDirect(),
 			circuitRelayTransport({
 				discoverRelays: 1
 			})
 		],
+		connectionManager: {
+			maxConnections: 10,
+			minConnections: 5
+		},
 		connectionEncryption: [noise()],
 		streamMuxers: [yamux()],
-		peerDiscovery,
-		pubsub: gossipsub({
-			allowPublishToZeroPeers: true,
-			msgIdFn: msgIdFnStrictNoSign,
-			ignoreDuplicatePublishError: true,
-			emitSelf: true
-		}),
-		identify: {
-			// these are set because we were seeing a lot of identify and identify push
-			// stream limits being hit
-			maxPushOutgoingStreams: 1000,
-			maxPushIncomingStreams: 1000,
-			maxInboundStreams: 1000,
-			maxOutboundStreams: 1000
+		connectionGater: {
+			denyDialMultiaddr: async () => false
 		},
-		autonat: {
-			startupDelay: 60 * 60 * 24 * 1000
+		peerDiscovery: [
+			bootstrap({
+				list: bootstrapNodes,
+				timeout: 1000, // in ms,
+				tagName: 'bootstrap',
+				tagValue: 50,
+				tagTTL: 120000 // in ms
+			})
+		],
+		services: {
+			pubsub: gossipsub({
+				allowPublishToZeroPeers: true,
+				msgIdFn: msgIdFnStrictNoSign,
+				ignoreDuplicatePublishError: true,
+				emitSelf: true
+			}),
+			dht: kadDHT({
+				protocolPrefix: '/universal-connectivity',
+				maxInboundStreams: 5000,
+				maxOutboundStreams: 5000,
+				clientMode: true
+			}),
+			identify: identifyService()
 		}
 	});
 
-	libp2p.pubsub.subscribe(CHAT_TOPIC);
+	libp2p.services.pubsub.subscribe(CHAT_TOPIC);
 
-	libp2p.peerStore.addEventListener('change:multiaddrs', ({ detail: { peerId, multiaddrs } }) => {
-		console.log(`changed multiaddrs: peer ${peerId.toString()} multiaddrs: ${multiaddrs}`);
+	libp2p.addEventListener('self:peer:update', ({ detail: { peer } }) => {
+		const multiaddrs = peer.addresses.map(({ multiaddr }) => multiaddr);
+
+		console.log(`changed multiaddrs: peer ${peer.id.toString()} multiaddrs: ${multiaddrs}`);
 		setWebRTCRelayAddress(multiaddrs, libp2p.peerId.toString());
 
 		const connListEls = libp2p.getConnections().map((connection) => {
@@ -147,7 +174,7 @@ export const connectToMultiaddr = (libp2p: Libp2p) => async (multiaddr: Multiadd
 
 export const publishMessage = (libp2p: Libp2p) => async (message: string) => {
 	try {
-		const res = await libp2p.pubsub.publish(CHAT_TOPIC, new TextEncoder().encode(message));
+		const res = await libp2p.services.pubsub.publish(CHAT_TOPIC, new TextEncoder().encode(message));
 
 		console.log(
 			'sent message to: ',
