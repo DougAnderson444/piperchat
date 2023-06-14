@@ -1,6 +1,6 @@
 # PiperChat 🔩😺
 
-Simple chat component for the PeerPiper network.
+Simple chat component for PeerPiper, powered by [Libp2p](https://libp2p.io/).
 
 ## Developing
 
